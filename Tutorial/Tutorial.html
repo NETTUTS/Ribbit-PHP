@@ -1,0 +1,1105 @@
+<h2>Build a Twitter Clone From Scratch in PHP</h2>
+
+<img src="ribbit.png" alt="Build a Twitter Clone From Scratch in PHP" width="200" height="200"/>
+
+<p>In this article I will continue the ongoing "Twitter Clone" series, showing you how to code "Ribbit" in PHP. I will be using standard PHP and mySQL to build this with a MVC-typed structure. There is a lot to cover so let's get right into it.</p>
+
+<hr />
+<h2>Tutorial Details</h2>
+<ul>
+	<li><b>Language</b>: PHP</li>
+	<li><b>Database</b>: mySQL</li>
+	<li><b>Estimated Completion Time:</b> 75 Minutes</li>
+</ul>
+
+<p>Like I mentioned above we are going to be building an MVC framework for our application. For the unfamilliar, MVC stands for Model - View - Controller or better understood database - html - logic code. Seperating your code like this allows you to - down the line - replace your database or update a page without interfering with the rest of your app. As you will see below this level of abstraction will also allow most functions to be very short relying on the underlying lower-level functions.</p>
+
+<p>When building this type of application I like to start with the Model as everything tends to be connected to it (I.E. signup, posts, etc). So let's setup the Database.</p>
+
+<hr />
+<h2>mySQL</h2>
+
+<p>We are going to need 4 tables to pull everything off.</p>
+
+<ul>
+	<li>1) Users - holds the user's info.</li>
+	<li>2) Ribbits - contains the actual ribbits (posts).</li>
+	<li>3) Follows - the list of who follows who.</li>
+	<li>4) UserAuth - the table for holding the login authentications</li>
+</ul>
+
+<p>I am going to show you how to do this from the terminal, if you have an admin program like PhpMyAdmin then you can either click the SQL button to enter in the commands directly or add the tables through the GUI.</p>
+
+<p>To start open up a terminal window and enter the following command:</p>
+
+<pre>[bash]
+mysql -u username -h hostAddress -P portNumber -p
+[/bash]</pre>
+
+<p>If you are running this command on the same machine that the mySQL server is setup on and the port number was not modified, you can ommit the -h and -P argments and the command will default to localhost and port 3306 respectively. Once you login you can now create the database using:</p>
+
+<pre>[mysql]
+CREATE DATABASE Ribbit;
+USE Ribbit;
+[/mysql]</pre>
+
+<p>Let's start off by creating the 'Users' table:</p>
+
+<pre>[mysql]
+CREATE TABLE Users (
+    id              INT NOT NULL AUTO_INCREMENT,
+    username        VARCHAR(18) NOT NULL,
+    name            VARCHAR(36),
+    password        VARCHAR(64),
+    created_at      DATETIME,
+    email           TEXT,
+    gravatar_hash   VARCHAR(32),
+    PRIMARY KEY(id, username)
+);
+[/mysql]</pre>
+
+<p>This will give us the following table:</p>
+
+<div class="tutorial_image"><img src="P1.png" border="0" /><p></p><p>Users Table</p></div>
+
+<p>The next table I want to create is the 'Ribbits' table. This table has only four fields; id, user_id, ribbit and created_at. The SQL code is as follows:</p>
+
+<pre>[mysql]
+CREATE TABLE Ribbits (
+    id            INT NOT NULL AUTO_INCREMENT,
+    user_id       INT NOT NULL,
+    ribbit        VARCHAR(140),
+    created_at    DATETIME,
+    PRIMARY KEY(id, user_id)
+);
+[/mysql]</pre>
+
+<div class="tutorial_image"><img src="P2.png" border="0" /><p></p><p>Ribbits Table</p></div>
+
+<p>Next there is the 'Follows' table, this just holds the id's of both the follower and followee:</p>
+
+<pre>[mysql]
+CREATE Table Follows (
+    id            INT NOT NULL AUTO_INCREMENT,
+    user_id       INT NOT NULL,
+    followee_id   INT,
+    PRIMARY KEY(id, user_id)
+);
+[/mysql]</pre>
+
+<div class="tutorial_image"><img src="P3.png" border="0" /><p></p><p>Follows Table</p></div>
+
+<p>And finally we have the table called 'UserAuth', this will hold the user's username and a hash. The reason I decided to go with the username as apposed to the user's id is because by login and signup (the two time when an entry will be added to this table) the program already has the username but would have to make an extra call to get the user's id number, so I voted against it.</p>
+
+<p>In a real world project you may want to add another field like 'hash2' or 'secret', because if all you need to authenticate as a user is one hash then it can be guessed randomly, i.e. I randomly enter characters into the hash field in the cookie and if there are enough users it might just match someone. But if you have to guess and match 2 hashes together than the chance of someone guessing the correct pair drops exponentially (same would apply to adding 3, etc). But to keep things simple I will only have one hash.</p>
+
+<p>The SQL code is as follows:</p>
+
+<pre>[mysql]
+CREATE TABLE UserAuth (
+    id        INT NOT NULL AUTO_INCREMENT,
+    hash      VARCHAR(52) NOT NULL,
+    username  VARCHAR(18),
+    PRIMARY KEY(id, hash)
+);
+[/mysql]</pre>
+
+<p>And the final table looks like so:</p>
+
+<div class="tutorial_image"><img src="P4.png" border="0" /><p></p><p>UserAuth Table</p></div>
+
+<p>Now that we have all the tables setup you should have a pretty good idea of how the overall site will work. We can now get started writing the Model class in our MVC framework.</p>
+
+<hr />
+<h2>The Model</h2>
+
+<p>To start off create a file called "model.php" and enter the following class declaration:</p>
+
+<pre>[php]
+<?php
+
+class Model{
+    
+    private $db; // Holds mysqli Variable
+    
+    function __construct(){
+    	$this->db = new mysqli('localhost', 'user', 'pass', 'Ribbit');
+    }
+}
+[/php]</pre>
+
+<p>If you have made PHP classes in the past then this should look pretty familliar to you. This code basically creates a class called Model that has one private property named '$db' which will hold the mysqli object. Inside the constructor I initialised the '$db' property using the connection info to my database, the order of the parameters are; address, username, password and database name.</p>
+
+<p>Now before we get into any page-specific code I want to create a few low-level commands that will abstract the common mySQL funcitons like 'SELECT' and 'INSERT'.</p> 
+
+<p>The first one I want to implement is 'SELECT', the function accepts a string for the table's name and an array of properties for building the WHERE clause. Here is the entire function, this should go right after the constructor:</p>
+
+<pre>[php]
+	//--- private function for performing standard SELECTs
+    private function select($table, $arr){
+        $query = "SELECT * FROM " . $table;
+        $pref = " WHERE ";
+        foreach($arr as $key => $value)
+        {
+            $query .= $pref . $key . "='" . $value . "'";
+            $pref = " AND ";
+        }
+        $query .= ";";
+        return $this->db->query($query);
+    }
+[/php]</pre>
+
+<p>The function builds a query string using the table's name and the array of properties and then it returns a 'mysqli result' object which we get by passing the query string through mysqli's query function. The next two functions are very similar and they are; the insert function and the delete function:</p>
+
+<pre>[php]
+    //--- private function for performing standard INSERTs
+    private function insert($table, $arr)
+    {
+        $query = "INSERT INTO " . $table . " (";
+        $pref = "";
+        foreach($arr as $key => $value)
+        {
+            $query .= $pref . $key;
+            $pref = ", ";
+        }
+        $query .= ") VALUES (";
+        $pref = "";
+        foreach($arr as $key => $value)
+        {
+            $query .= $pref . "'" . $value . "'";
+            $pref = ", ";
+        }
+        $query .= ");";
+        return $this->db->query($query);
+    }
+    
+    //--- private function for performing standard DELETEs
+    private function delete($table, $arr){
+        $query = "DELETE FROM " . $table;
+        $pref = " WHERE ";
+        foreach($arr as $key => $value)
+        {
+            $query .= $pref . $key . "='" . $value . "'";
+            $pref = " AND ";
+        }
+        $query .= ";";
+        return $this->db->query($query);
+    }
+[/php]</pre>
+
+<p>As you may have guessed they both just generate a mySQL query and return a result after it's been passed through the database. I want to add one more helper function before we actualy get started and that is the exists function. This function will just check if a row exists in a specified table, it does this by running the select function that we just implemented and checks whether there were any rows returned. Here is the function:</p>
+
+<pre>[php]
+    //--- private function for checking if a row exists
+    private function exists($table, $arr){
+        $res = $this->select($table, $arr);
+        return ($res->num_rows > 0) ? true : false;
+    }
+[/php]</pre>
+
+<p>Now before we make the more page-specific functions we should probably go make the actual pages, so save out this file and let's start on the url routing.</p>
+
+<hr />
+<h2>The Router</h2>
+
+<p>In a MVC framework all HTTP requests usually go to a single controller, and the controller figures out which function to run based on the url request. We are going to do this with a class called 'Router', this class will accept a string which is the requested page and it will return the name of the function that has to get called by the controller. You can think of it, as a kind of phonebook but for function names instead of numbers.</p>
+
+<p>Here is the completed class's structure, just save this to a file called "router.php":</p>
+
+<pre>[php]
+<?php
+
+class Router{
+	private $routes;
+	
+	function __construct(){
+		$this->routes = array();
+	}
+	
+	public function lookup($query)
+	{
+		if(array_key_exists($query, $this->routes))
+		{
+			return $this->routes[$query];
+		}
+		else
+		{
+			return false;
+		}
+	}
+}
+[/php]</pre>
+
+<p>This class has one private property which is the actual "phonebook" and a simple function which just returns a string if the path in the array exists. To save time I will just show you the final list of functions that we will have in the controller, there are 10 in total:</p>
+
+<pre>[php]
+	function __construct(){
+		$this->routes = array(
+			"home" => "indexPage",
+            "signup" => "signUp",
+            "login" => "login",
+            "buddies" => "buddies",
+            "ribbit" => "newRibbit",
+            "logout" => "logout",
+            "public" => "publicPage",
+            "profiles" => "profiles",
+            "unfollow" => "unfollow",
+            "follow" => "follow"
+		);
+	}
+[/php]</pre>
+
+<p>The list goes by the format of 'url' => 'function name', so for example if someone goes to "ribbit.com/home" then the router will tell the controller to run the 'indexPage' function. Now the router is only half the solution we still need to tell apache to redirect all traffic to the controller.</p>
+
+<p>To do this create a file called .htaccess in the root directory of your site and add the following to it:</p>
+
+<pre>[bash]
+RewriteEngine On
+RewriteRule ^/?Resource/(.*)$ /$1 [L]
+RewriteRule ^$ /home [redirect]
+RewriteRule ^([a-zA-Z]+)/?([a-zA-Z0-9/]*)$ /app.php?page=$1&query=$2 [L]
+[/bash]</pre>
+
+<p>If you've never used apache's mod_rewrite before then this may seem a little intimidating, but I'll walk you through it line by line.</p>
+
+<p>The first line just tells apache to enable mod_rewrite, after this the rest of the lines are the rewrite rules. One of the things that mod_rewrite allows you to do, is to take an incoming request with a certain url and pass the request onto a different file. In our case we want all requests to be handled by a single file so that we can process them with the controller and not have to create alot of extra files for each page. Another benefit to using mod_rewrite is that you can have urls like "ribbit.com/profile/username" instead of "ribbit.com/profile.php?username=username" making the overall feel of your app more professional.</p>
+
+<p>Now I said we want all request to go to a single file, but that's not really true. We still want requests to resources like images, css files, etc to go through normally. Inorder to do this I added the first rewrite rule, this rule tells apache that any link which starts with "Resource/" should be loaded regularly. It's a regex expression if you are familiar, which takes everything after the word "Resource/" (notice the grouping brackets) and uses that as the real url to the file. So for example if you have a link to "ribbit.com/Resource/css/main.css" then it would load the file located at "ribbit.com/css/main.css".</p>
+
+<p>The next rule tells apache that if you have a blank request (i.e. a request to the websites root) then redirect the browser to "/home". The word redirect that is in the square brackets at the end of the line tells apache to actually redirect the browser as apposed to what happened in the first rule where the browsers url will still point to the same place just apache will load a different file.</p>
+
+<p>The last rule is the one we came for, it takes all urls other than ones that start with "Resource/" and it sends them to a PHP file called "app.php". That will be the file that loads the controller and runs the whole application. The "^" symbol represents the beggining of the string and the "$" represents the end. So the regex command can be expressed in english as: "Take everything from the beggining of the url until the first slash and put it in group 1 then take everything after the slash and put it in group 2 and finally pass the link on to apache as if it said 'app.php?page=group1&query=group2'" The "[L]" that is in the first and third line tells apache to stop after that line, so if it is a resource url it shouldn't continue to the next rule it should break after the first one.</p>
+
+<p>I hope all that made sense, I made the following picture in an attempt to better illustrate what's going on.</p>
+
+<div class="tutorial_image"><img src="P5.png" border="0" /></div>
+
+<p>If you are still unclear on the actual regex, then we have a very nice article on NetTuts that you can read here: <a href="http://net.tutsplus.com/tutorials/other/8-regular-expressions-you-should-know/" alt="8 regular expressions you should know">8 regular expressions you should know</a></p>
+
+
+<p>Now that we have everything setup url-wise let's create the controller.</p>
+
+<hr />
+<h2>The Controller</h2>
+
+<p>The controller is where most of the magic is going to happen, all the other pieces of the app including the model and router that we just made connect through here. To begin create a file called "controller.php" and enter in the following:</p>
+
+<pre>[php]
+<?php
+require("model.php");
+require("router.php");
+
+class Controller{
+	
+	private $model;
+	private $router;
+	
+	//Constructor
+	function __construct(){
+		//initialize private variables
+		$this->model = new Model();
+		$this->router = new Router();
+		
+        //Proccess Query String
+        $queryParams = false;
+        if(strlen($_GET['query']) > 0)
+        {
+            $queryParams = explode("/", $_GET['query']);
+        }
+        
+        $page = $_GET['page'];
+        
+		//Handle Page Load
+		$endpoint = $this->router->lookup($page);
+		if($endpoint === false)
+		{
+			header("HTTP/1.0 404 Not Found");
+		}
+		else
+		{
+            $this->$endpoint($queryParams);
+            
+		}
+	}
+[/php]</pre>
+
+<p>We first load the model and router files that we just built. Then we create a class called Controller which contains two private variables one for the model and one for the router. Inside the constructor we initialize the variables and proccess the query string. If you remember the query can contain multiple values because we wrote in the .htaccess file that everything after the first slash gets put in here, this includes all slashes that may follow. So we will split the query string by slashes, allowing us to pass multiple query parameters if needed. Next we pass whatever was in the page variable to the router to find out what function needs to be run. If the router returns with a string then we will call the specified function passing with it the query parameters, and if the router returns false I set it to display the 404 error. Alternatively you can redirect the page to a custom 404 view if you wanted, but to keep things simple I'll leave it like it is.</p>
+
+<p>The framework is already starting to take shape, you can now call a specific function based on a url. The next step before we start working on the views, is to add a few functions to the controller class which will take care of the lower-level tasks like loading a view and redirecting the page.</p>
+
+<p>The first function just redirects the browser to a different page, we will be doing this alot so I thought it would be a good idea to make a function for it:</p>
+
+<pre>[php]
+	private function redirect($url){
+        header("Location: /" . $url);
+    }
+[/php]</pre>
+
+<p>Just standard PHP for redirecting the browser. The next two functions are for loading a view and loading a page respectively:</p>
+
+<pre>[php]
+	private function loadView($view, $data = null){
+		if(is_array($data))
+		{
+			extract($data);
+		}
+		require("Views/" . $view . ".php");
+	}
+	private function loadPage($user, $view, $data = null, $flash = false){
+        $this->loadView("header", array('User' => $user));
+        if($flash !== false)
+        {
+            $flash->display();
+        }
+        $this->loadView($view, $data);
+        $this->loadView("footer");
+    }
+[/php]</pre>
+
+<p>The first function loads a single view from the "Views" folder, optionally extracting the variables from the attached array. The second function is the one we are going to be referencing and it loads the header and footer which are the same on all pages around the specified view for that page, additionally if their is a message for the user (flash i.e. an error message, greetings, etc) it will be displayed as well but more on them later.</p>
+
+<p>There is one last function that we need to implement which is required on all pages and that is the "checkAuth" function. This function will check if a user is signed in and if so pass the user's data to the page otherwise it will return false. Here is the function:</p>
+
+<pre>[php]
+	private function checkAuth(){
+        if(isset($_COOKIE['Auth']))
+        {
+            return $this->model->userForAuth($_COOKIE['Auth']);
+        }
+        else
+        {
+            return false;
+        }
+	}
+[/php]</pre>
+
+<p>We first check whether or not the 'Auth' cookie is set, this is where the hash we talked about earlier will be placed. If the cookie exists then the function will try and verify it with the database either returning the user on a successful match or false if it's not in the table.</p>
+
+<p>Now let's go implement that function in the model class.</p>
+
+<hr />
+<h2>A few odds & ends</h2>
+
+<p>Now in the "Model" class right after the "exists" function that we implemented earlier add the following function:</p>
+
+<pre>[php]
+    public function userForAuth($hash){
+        $query = "SELECT Users.* FROM Users JOIN (SELECT username FROM UserAuth WHERE hash = '"; 
+        $query .= $hash . "' LIMIT 1) AS UA WHERE Users.username = UA.username LIMIT 1";
+        $res = $this->db->query($query);
+        if($res->num_rows > 0)
+        {
+            return $res->fetch_object();
+        }
+        else
+        {
+            return false;
+        }
+    }
+[/php]</pre>
+
+<p>If you remember our tables, we had a UserAuth table which contained the hash along with a username. This SQL query get's the row which contains the hash from the cookie and returns the user that has the matching username, and like I said if the hash exists then the user will be returned otherwise the function will return false.</p>
+
+<p>That's all we have to do here for now so let's go back into the controller.php file and implement the flash class which we saw earlier.</p>
+
+<p>In the loadPage function there was an option to pass in a 'flash' which is basically a message that shows up above all the content. So for example if the user tries to post something and he is not signed in then it will display a message saying something like "you have to be signed in to perform that action". Since their are different kinds of flashes; error, warning and notice, I decided it would be easier just to create it's own class instead of passing a bunch of variables like "msg" and "type". Additionally the class will have a function which ouputs the HTML for the flash. Here is the complete class, you can add this to the controller.php just before the "Controller" class definition:</p>
+
+<pre>[php]
+class Flash{
+    
+    public $msg;
+    public $type;
+    
+    function __construct($msg, $type)
+    {
+        $this->msg = $msg;
+        $this->type = $type;
+    }
+    
+    public function display(){
+        echo "<div class=\"flash " . $this->type . "\">" . $this->msg . "</div>";
+    }
+}
+[/php]</pre>
+
+<p>Pretty straight forward just the two properties and a function to ouput the HTML. We now have all the pieces needed to start displaying pages so let's create the "app.php" file which if you remember is the file where all the requests get sent to.</p>
+
+<p>Create the file and insert the following code:</p>
+
+<pre>[php]
+<?php
+	require("controller.php");
+	$app = new Controller();
+[/php]</pre>
+
+<p>And that's it!, the controller will then read the request from the GET variable pass it to the router and call the appropriate function.</p>
+
+<p>Let's create some of the views now so we can finally get something on the screen.</p>
+
+<hr />
+<h2>The Views</h2>
+
+<p>Create a folder in the root of your site called "Views" you may have already guessed it but this is where we are going to put all the actual views. If you are unclear on what views are then I think the best way to describe them is to say that they are files that generate pieces of HTML that build up the page. Basically we are going to have a view for the header and footer and one view for each page. Together all the pieces will be combined into the final result (i.e. header + page_view + footer = final_page).</p>
+
+<p>Let's start with the footer as it is just standard HTML. Create a file called "footer.php" inside the "Views" folder and put the following inside:</p>
+
+<pre>[php]
+		</div>
+	</div>	
+    <footer>
+		<div class="wrapper">
+			Ribbit - A Twitter Clone Tutorial<img src="/Resource/gfx/logo-nettuts.png">
+		</div>
+	</footer>
+</body>
+</html>
+[/php]</pre>
+
+<p>I think this demonstrates two things very well, number one: the fact that these are just pieces of an actual page, and number two: the fact that to access the images that are in the "gfx" folder I had to add "Resources/" to the beggining of it in-order to get passed the other mod_rewrite rule.</p>
+
+<p>Next let's make the "header.php" file, the header is a bit more complicated as it has to check if the user is signed in or not. If the user is logged in then it should display the menu bar otherwise it should have a login form. Here is the complete "header.php":</p>
+
+<pre>[php]
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet/less" href="/Resource/style.less">
+		<script src="/Resource/less.js"></script>
+	</head>
+	<body>
+		<header>
+			<div class="wrapper">
+				<img src="/Resource/gfx/logo.png">
+				<span>Twitter Clone</span>
+				<?php if($User !== false){ ?>
+	                <nav>
+	                    <a href="/buddies">Your Buddies</a>
+	                    <a href="/public">Public Ribbits</a>
+	                    <a href="/profiles">Profiles</a>
+	                </nav>
+	                <form action="/logout" method="get">
+	                    <input type="submit" id="btnLogOut" value="Log Out">
+	                </form>
+	            <?php }else{ ?>
+	                <form method="post" action="/login">
+	                    <input name="username" type="text" placeholder="username">
+	                    <input name="password" type="password" placeholder="password">
+	                    <input type="submit" id="btnLogIn" value="Log In">
+	                </form>
+	            <?php } ?>
+			</div>
+		</header>
+	    <div id="content">
+			<div class="wrapper">
+[/php]</pre>
+
+<p>I'm not going to go to much into the HTML just because of the sheer amount of things that have to be covered, but overall this view loads in the stylesheet and builds the correct header based on whether the user is logged in or not. This is accomplished with a simple "if" statement and the variable which is passed from the controller.</p>
+
+<p>The last view for the homepage is the actual "home.php" view, the "home" view will contain the greeting picture along with a signup form. Here is the code for the "home.php" view:</p>
+
+<pre>[php]
+			<img src="/Resource/gfx/frog.jpg">
+			<div class="panel right">
+				<h1>New to Ribbit?</h1>
+				<p>
+					<form action="/signup" method="post">
+						<input name="email" type="text" placeholder="Email">
+		                <input name="username" type="text" placeholder="Username">
+		                <input name="name" type="text" placeholder="Full Name">
+		                <input name="password" type="password" placeholder="Password">
+		                <input name="password2" type="password" placeholder="Confirm Password">
+		                <input type="submit" value="Create Account">
+					</form>
+				</p>
+			</div>
+[/php]</pre>
+
+<p>All together these three views complete the homepage. Now that everything is in place let's go write the function for the home page.</p>
+
+<hr />
+<h2>The Home Page</h2>
+
+<p>To get the home page loaded we have to write a function in the "Controller" class called "indexPage" (this is what we set up in the router class). I will show you the whole function and then go through it, this should go in the Controller class right after the "checkAuth" function we built:</p>
+
+<pre>[php]
+	private function indexPage($params){
+        $user = $this->checkAuth();
+        if($user !== false){ $this->redirect("buddies"); }
+        else
+        {
+            $flash = false;
+            if($params !== false)
+            {
+                $flashArr = array(
+                    "0" => new Flash("Your Username and/or Password was incorrect.", "error"),
+                    "1" => new Flash("There's already a user with that email address.", "error"),
+                    "2" => new Flash("That username has already been taken.", "error"),
+                    "3" => new Flash("Passwords don't match.", "error"),
+                    "4" => new Flash("Your Password must be at least 6 characters long.", "error"),
+                    "5" => new Flash("You must enter a valid Email address.", "error"),
+                    "6" => new Flash("You must enter a username.", "error"),
+                    "7" => new Flash("You have to be signed in to acces that page.", "warning")
+                );
+                $flash = $flashArr[$params[0]];
+            }
+            $this->loadPage($user, "home", array(), $flash);
+        }
+	}
+[/php]</pre>
+
+<p>The first two lines check if the user is already signed in, if the user is signed in it will redirect them to the "buddies" page that is where they can read their friend's posts and view their profile. If the user is not signed in then it will continue to load the home page checking if there are any flashes to display based on the query parameters. So for instance if the user goes to "ribbit.com/home/0" then it will show the first error and so on for the next seven flashes. After this we call the loadPage function to display everything on the screen.</p>
+
+<p>At this point if you have everything setup correctly (i.e. apache and our code so far) then you should be able to go to the root of your site (e.g. localhost) and see the home page.</p>
+
+<div class="tutorial_image"><img src="P6.png" border="0" /></div>
+
+<p>If you have made it this far then Congratulations!! from here on out it's smooth sailing, well at least smoother sailing. It's just a matter of repeating the previous steps for the other nine functions that we defined in the router.</p>
+
+<hr />
+<h2>Rinse and Repeat</h2>
+
+<p>The next logical step is to create the signup function, you can add this right after the "indexPage":</p>
+
+<pre>[php]
+	private function signUp(){
+        if($_POST['email'] == "" || strpos($_POST['email'], "@") === false){
+            $this->redirect("home/5");
+        }
+        else if($_POST['username'] == ""){
+            $this->redirect("home/6");
+        }
+        else if(strlen($_POST['password']) < 6)
+        {
+            $this->redirect("home/4");
+        }
+        else if($_POST['password'] != $_POST['password2'])
+        {
+            $this->redirect("home/3");
+        }
+        else{
+            $pass = hash('sha256', $_POST['password']);
+            $signupInfo = array(
+                'username' => $_POST['username'],
+                'email' => $_POST['email'],
+                'password' => $pass,
+                'name' => $_POST['name']
+            );
+            $resp = $this->model->signupUser($signupInfo);
+            if($resp === true)
+            {
+                $this->redirect("buddies/1");
+            }
+            else
+            {
+                $this->redirect("home/" . $resp); 
+            }
+        }
+    }
+[/php]</pre>
+
+<p>This function goes through the standard signup procedure of making sure everything checks out, if at any point it finds that the users info doesn't pass it will redirect the user back to the home page along with the appropriate error code for the indexPage function to display. There are two checks which couldn't be performed here and they are; checking if the username and/or email is already taken. Those two have to happen in the Model class because we need a connection to the database for it. Let's go back to the Model class and implement the signupUser function. You should put this right after the "userForAuth" function:</p>
+
+<pre>[php]
+	public function signupUser($user){
+        $emailCheck = $this->exists("Users", array("email" => $user['email']));
+        if($emailCheck){
+            return 1;
+        }
+        else{
+            $userCheck = $this->exists("Users", array("username" => $user['username']));
+            if($userCheck){
+                return 2;
+            }
+            else{
+                $user['created_at'] = date( 'Y-m-d H:i:s');
+                $user['gravatar_hash'] = md5(strtolower(trim($user['email'])));
+                $this->insert("Users", $user);
+                $this->authorizeUser($user);
+                return true;
+            }
+        }
+    }
+[/php]</pre>
+
+<p>We use the "exists" function we defined earlier to check the email or username, returning with an error code if they already exist. If all the info passes then we add the final few fields; created_at and gravatar_hash and then we insert it into the database. The last thing we do before returning "true" is authorize the user, this function will add the Auth cookie and insert the credentials into the "UserAuth" database. Let's add the "authorizeUser" function now:</p>
+
+<pre>[php]
+ 	public function authorizeUser($user){
+        $chars = "qazwsxedcrfvtgbyhnujmikolp1234567890QAZWSXEDCRFVTGBYHNUJMIKOLP";
+        $hash = sha1($user['username']);
+        for($i = 0; $i<12; $i++)
+        {
+            $hash .= $chars[rand(0, 61)]; 
+        }
+        $this->insert("UserAuth", array("hash" => $hash, "username" => $user['username']));
+        setcookie("Auth", $hash);
+    }
+[/php]</pre>
+
+<p>This function builds the unique hash for a user on sign up and login. This isn't a very secure way of generating hashes but in order to keep things simple I am going to just combine the sha1 hash of the username along with a random 12 numbers and letters. The reason it's good to attach some of the users info to the hash is it helps make the hashes unique to that user. There are only a certain amount of character combinations and overtime you are bound to get two users with the same hash, but if for instance you add the users id to the hash then you are gauranteed that the hash is unique to this user.</p>
+
+<hr />
+<h2>Login and Logout</h2>
+
+<p>To finish off the functions for the home page let's implement the login and logout functions. So back in the Controller class add the following login function:</p>
+
+<pre>[php]
+	private function login(){
+        $pass = hash('sha256', $_POST['password']);
+		$loginInfo = array(
+			'username' => $_POST['username'],
+			'password' => $pass
+		);
+		if($this->model->attemptLogin($loginInfo))
+        {
+            $this->redirect("buddies/0");
+        }
+        else
+        {
+            $this->redirect("home/0");
+        }
+	}
+[/php]</pre>
+
+<p>This simply takes the POST fields from the login box and attempts to login, on a successful login it will go to the "buddies" page otherwise it will redirect back to the homepage and display the appropriate error. Next I'll show you the logout function:</p>
+
+<pre>[php]
+	private function logout(){
+        $this->model->logoutUser($_COOKIE['Auth']);
+        $this->redirect("home");
+    }
+[/php]</pre>
+
+<p>The logout function is even simpler than the login. All it does is run a function from the Model class which will erase the cookie and remove the entry from the database. Now let's jump over to the Model class and add the neccessary functions for these to updates.</p>
+
+<p>The first one is the 'attemptLogin' which will try and login returning true or false, and then we have the logout which I already exaplained what it does:</p>
+
+<pre>[php]
+	public function attemptLogin($userInfo){
+        if($this->exists("Users", $userInfo))
+        {
+            $this->authorizeUser($userInfo);
+            return true;
+        }
+        else{
+            return false;
+        }
+    }
+    
+    public function logoutUser($hash){
+        $this->delete("UserAuth", array("hash" => $hash));
+        setcookie ("Auth", "", time() - 3600);
+    }
+[/php]</pre>
+
+<hr />
+<h2>The Buddies Page</h2>
+
+<p>We are getting close to the end, so far we have setup the database, built the framework and implemented the homepage along with the user login/signup mechanism. We can now build the "Buddies" page, this page contains your profile info and a list of posts from you and the people you follow. Let's start with the actual view, So create a file called "buddies.php" in the Views folder and insert the following:</p>
+
+<pre>[php]
+<div id="createRibbit" class="panel right">
+    <h1>Create a Ribbit</h1>
+    <p>
+        <form action="/ribbit" method="post">
+            <textarea name="text" class="ribbitText"></textarea>
+            <input type="submit" value="Ribbit!">
+        </form>
+    </p>
+</div>
+<div id="ribbits" class="panel left">
+	<h1>Your Ribbit Profile</h1>
+	<div class="ribbitWrapper">
+		<img class="avatar" src="http://www.gravatar.com/avatar/<?php echo $User->gravatar_hash; ?>">
+		<span class="name"><?php echo $User->name; ?></span> @<?php echo $User->username; ?>
+		<p>
+			<?php echo $userData->ribbit_count . " "; echo ($userData->ribbit_count != 1) ? "Ribbits" : "Ribbit"; ?>
+            <span class="spacing"><?php echo $userData->followers . " "; echo ($userData->followers != 1) ? "Followers" : "Follower"; ?></span>
+            <span class="spacing"><?php echo $userData->following . " Following"; ?></span><br>
+			<?php echo $userData->ribbit; ?>
+		</p>
+	</div>
+</div>
+<div class="panel left">
+	<h1>Your Ribbit Buddies</h1>
+    <?php foreach($fribbits as $ribbit){ ?>
+            <div class="ribbitWrapper">
+                <img class="avatar" src="http://www.gravatar.com/avatar/<?php echo $ribbit->gravatar_hash; ?>">
+                <span class="name"><?php echo $ribbit->name; ?></span> @<?php echo $ribbit->username; ?> 
+                <span class="time">
+                <?php 
+                    $timeSince = time() - strtotime($ribbit->created_at); 
+                    if($timeSince < 60)
+                    {
+                        echo $timeSince . "s";
+                    }
+                    else if($timeSince < 3600)
+                    {
+                        echo floor($timeSince / 60) . "m";
+                    }
+                    else if($timeSince < 86400)
+                    {
+                        echo floor($timeSince / 3600) . "h";
+                    }
+                    else{
+                        echo floor($timeSince / 86400) . "d";
+                    }
+                ?>
+                </span>
+                <p><?php echo $ribbit->ribbit; ?></p>
+            </div>
+  <?php } ?>			
+</div>
+[/php]</pre>
+
+<p>The first div is the form for creating new "ribbits" then the next div is the user's profile info and finally the last section is the 'for' loop which displays each "ribbit". Again I'm not going to go into to much detail for the sake of time but everything here is pretty straight forward.</p>
+
+<p>Now in the Controller class we have to add the 'buddies' function:</p>
+
+<pre>[php]
+	private function buddies($params){
+        $user = $this->checkAuth();
+        if($user === false){ $this->redirect("home/7"); }
+        else
+        {
+            $userData = $this->model->getUserInfo($user);
+            $fribbits = $this->model->getFollowersRibbits($user);
+            $flash = false;
+            if(isset($params[0]))
+            {
+                $flashArr = array(
+                    "0" => new Flash("Welcome Back, " . $user->name, "notice"),
+                    "1" => new Flash("Welcome to Ribbit, Thanks for signing up.", "notice"),
+                    "2" => new Flash("You have exceeded the 140 character limit for Ribbits", "error")
+                );
+                $flash = $flashArr[$params[0]];
+            }
+            $this->loadPage($user, "buddies", array('User' => $user, "userData" => $userData, "fribbits" => $fribbits), $flash);
+        }
+    }
+[/php]</pre>
+
+<p>This function follows the same structure as the indexPage function in that we first check if the user is logged in, and if not we redirect the user to the home page. We then call two functions from the Model class; one to get the user's profile info and one to get the posts from the user's followers. We have three possible flashes here; one for signup, one for login and one for if the user exceeds the 140 character limit on a new ribbit. finally we call the loadPage function to display everything.</p>
+
+<p>Now in the Model class we have to enter the two functions we called above. First we have the 'getUserInfo' function:</p>
+
+<pre>[php]
+	public function getUserInfo($user)
+    {
+        $query = "SELECT ribbit_count, IF(ribbit IS NULL, 'You have no Ribbits', ribbit) as ribbit, followers, following ";
+        $query .= "FROM (SELECT COUNT(*) AS ribbit_count FROM Ribbits WHERE user_id = " . $user->id . ") AS RC ";
+        $query .= "LEFT JOIN (SELECT user_id, ribbit FROM Ribbits WHERE user_id = " . $user->id . " ORDER BY created_at DESC LIMIT 1) AS R "; 
+        $query .= "ON R.user_id = " . $user->id . " JOIN ( SELECT COUNT(*) AS followers FROM Follows WHERE followee_id = " . $user->id;
+        $query .=  ") AS FE JOIN (SELECT COUNT(*) AS following FROM Follows WHERE user_id = " . $user->id . ") AS FR;";
+        $res = $this->db->query($query);
+        return $res->fetch_object();
+    }
+[/php]</pre>
+
+<p>The function itself is pretty simple we just run a SQL query through the database and return the result. The actual query on the other hand may seem a bit complex, but what it's actually doing is just combining the neccesary info for the profile section into a single row. The info returned by this query includes; amount of ribbits you made, your latest ribbit, how many followers you have and how many people you are following. This query basically combines one normal SELECT query for each of these properties and then joins everthing together.</p>
+
+<p>Next we had the "getFollowersRibbits" function which looks like so:</p>
+
+<pre>[php]
+	public function getFollowersRibbits($user)
+    {
+        $query = "SELECT name, username, gravatar_hash, ribbit, Ribbits.created_at FROM Ribbits JOIN (";
+        $query .= "SELECT Users.* FROM Users LEFT JOIN (SELECT followee_id FROM Follows WHERE user_id = ";
+        $query .= $user->id . " ) AS Follows ON followee_id = id WHERE followee_id = id OR id = " . $user->id;
+        $query .= ") AS Users on user_id = Users.id ORDER BY Ribbits.created_at DESC LIMIT 10;";
+        $res = $this->db->query($query);
+        $fribbits = array();
+        while($row = $res->fetch_object())
+        {
+            array_push($fribbits, $row);
+        }
+        return $fribbits;
+    }
+[/php]</pre>
+
+<p>Like the previous function the only complicated part is the query which if you are familliar with mySQL shouldn't be an issue. For each post we need the following info to display; name, username, gravatar image, the actual ribbit and the date when the ribbit was created. This query sorts through your posts and the posts from the people you follow and returns the 10 latest to display on the buddies page.</p>
+
+<p>You should now be able to signup / login and view the buddies page. We are still not able to create ribbits so let's get on that next.</p>
+
+<hr />
+<h2>Posting your first Ribbit</h2>
+
+<p>This step is pretty easy as their is no view to deal with just a function in the Controller and a function in the Model. In the Controller add the following function:</p>
+
+<pre>[php]
+    private function newRibbit($params){
+        $user = $this->checkAuth();
+        if($user === false){ $this->redirect("home/7"); }
+        else{
+            $text = mysql_real_escape_string($_POST['text']);
+            if(strlen($text) > 140)
+            {
+                $this->redirect("buddies/2");
+            }
+            else
+            {
+                $this->model->postRibbit($user, $text);
+                $this->redirect("buddies");
+            }
+        }
+        
+    }
+[/php]</pre>
+
+<p>Again we start off by checking if the user is logged in and if not we redirect back to the home page. If the user is signed in we start off by making sure the post is not over the 140 character limit and if everything is OK we call postRibbit from the model and redirect back to the buddies page.</p>
+
+<p>Now in the Model class add the postRibbit function:</p>
+
+<pre>[php]
+	public function postRibbit($user, $text){
+        $r = array(
+            "ribbit" => $text,
+            "created_at" => date( 'Y-m-d H:i:s'),
+            "user_id" => $user->id
+        );
+        $this->insert("Ribbits", $r);
+    }
+[/php]</pre>
+
+<p>We are back to standard queries with this one, just combining the data into an array and inserting it through the insert function we made earlier. You should now be able to post Ribbits, so go try posting a few and when your done come back because we still have a little more work to do.</p>
+
+<hr />
+<h2>The Last Two Pages</h2>
+
+<p>The next two pages have almost identicle functions in the controller so I'm going to post them together:</p>
+
+<pre>[php]
+	private function publicPage($params){
+        $user = $this->checkAuth();
+        if($user === false){ $this->redirect("home/7"); }
+        else
+        {
+            $q = false;
+            if(isset($_POST['query']))
+            {
+                $q = $_POST['query'];
+            }
+            $ribbits = $this->model->getPublicRibbits($q);
+            $this->loadPage($user, "public", array('ribbits' => $ribbits));
+        }
+    }
+    
+    private function profiles($params){
+        $user = $this->checkAuth();
+        if($user === false){ $this->redirect("home/7"); }
+        else{
+            $q = false;
+            if(isset($_POST['query']))
+            {
+                $q = $_POST['query'];
+            }
+            $profiles = $this->model->getPublicProfiles($user, $q);
+            $this->loadPage($user, "profiles", array('profiles' => $profiles));
+        }
+    }
+[/php]</pre>
+
+<p>They both get an array of data - one get's ribbits and the other profiles - they both have a search by a POST string option and they both just get the info from the Model and display the rows in a view. Now let's go put the views in the 'Views' folder.</p>
+
+<p>For the ribbits just create a file called 'public.php' and put the following inside:</p>
+
+<pre>[php]
+<div class="panel right">
+	<h1>Search Ribbits</h1>
+	<p>
+		</p><form action="/public" method="post">
+			<input name="query" type="text">
+			<input type="submit" value="Search!">
+		</form>
+	<p></p>
+</div> 
+<div id="ribbits" class="panel left">
+	<h1>Public Ribbits</h1>
+		<?php foreach($ribbits as $ribbit){ ?>
+	        <div class="ribbitWrapper">
+	            <img class="avatar" src="http://www.gravatar.com/avatar/<?php echo $ribbit->gravatar_hash; ?>">
+	            <span class="name"><?php echo $ribbit->name; ?></span> @<?php echo $ribbit->username; ?> 
+	            <span class="time">
+	            <?php 
+	                $timeSince = time() - strtotime($ribbit->created_at); 
+	                if($timeSince < 60)
+	                {
+	                    echo $timeSince . "s";
+	                }
+	                else if($timeSince < 3600)
+	                {
+	                    echo floor($timeSince / 60) . "m";
+	                }
+	                else if($timeSince < 86400)
+	                {
+	                    echo floor($timeSince / 3600) . "h";
+	                }
+	                else{
+	                    echo floor($timeSince / 86400) . "d";
+	                }
+	            ?>
+	            </span>
+	            <p><?php echo $ribbit->ribbit; ?></p>
+	        </div>
+		<?php } ?>
+</div>
+[/php]</pre>
+
+<p>The first div is the search form for the ribbits and the second div displays the public ribbits in exactly the same way as on the buddies page.</p>
+
+<p>And here is the last view which is the "profiles.php" view:</p>
+
+<pre>[php]
+<div class="panel right">
+	<h1>Search for Profiles</h1>
+	<p>
+		</p><form action="/profiles" method="post">
+			<input name="query" type="text">
+			<input type="submit" value="Search!">
+		</form>
+	<p></p>
+</div>
+<div id="ribbits" class="panel left">
+    <h1>Public Profiles</h1>
+    <?php foreach($profiles as $user){ ?>
+    <div class="ribbitWrapper">
+        <img class="avatar" src="http://www.gravatar.com/avatar/<?php echo $user->gravatar_hash; ?>">
+        <span class="name"><?php echo $user->name; ?></span> @<?php echo $user->username; ?> 
+        <span class="time"><?php echo $user->followers; echo ($user->followers > 1) ? " followers " : " follower "; ?>
+            <a href="<?php echo ($user->followed) ? "unfollow" : "follow"; ?>/<?php echo $user->id; ?>"><?php echo ($user->followed) ? "unfollow" : "follow"; ?></a></span>
+        <p>
+            <?php echo $user->ribbit; ?>
+        </p>
+    </div>
+    <?php } ?>
+</div>
+[/php]</pre>
+
+<p>Very similar to the previous view just a search form and a for loop for displaying all the profiles. The last step needed to get these two pages working is to add their dependency functions to the Model class.</p>
+
+<p>Let's start with the function to get the public ribbits, add this to the Model class:</p>
+
+<pre>[php]
+	public function getPublicRibbits($q){
+        if($q === false)
+        {
+            $query = "SELECT name, username, gravatar_hash, ribbit, Ribbits.created_at FROM Ribbits JOIN Users ";
+            $query .= "ON user_id = Users.id ORDER BY Ribbits.created_at DESC LIMIT 10;";
+        }
+        else{
+            $query = "SELECT name, username, gravatar_hash, ribbit, Ribbits.created_at FROM Ribbits JOIN Users ";
+            $query .= "ON user_id = Users.id WHERE ribbit LIKE \"%" . $q ."%\" ORDER BY Ribbits.created_at DESC LIMIT 10;";   
+        }
+        $res = $this->db->query($query);
+        $ribbits = array();
+        while($row = $res->fetch_object())
+        {
+            array_push($ribbits, $row);
+        }
+        return $ribbits;
+    }
+[/php]</pre>
+
+<p>If a search query was passed in then we will only select ribbits that match the search, otherwise it will just take the 10 newest ones. Like before we are using SQL "JOIN"s to combine the user's info to the ribbit. The next function is a bit more complicated as we are going to have to make multiple SQL queries. Enter this function to get the public profiles:</p>
+
+<pre>[php]
+	public function getPublicProfiles($user, $q){
+        if($q === false)
+        {
+            $query = "SELECT id, name, username, gravatar_hash FROM Users WHERE id != " . $user->id;
+            $query .= " ORDER BY created_at DESC LIMIT 10";
+        }
+        else{
+            $query = "SELECT id, name, username, gravatar_hash FROM Users WHERE id != " . $user->id;
+            $query .= " AND (name LIKE \"%" . $q . "%\" OR username LIKE \"%" . $q . "%\") ORDER BY created_at DESC LIMIT 10";
+        }
+        $userRes = $this->db->query($query);
+        if($userRes->num_rows > 0){
+	        $userArr = array();
+	        $query = "";
+	        while($row = $userRes->fetch_assoc()){
+	            $i = $row['id'];
+	            $query .= "SELECT " . $i . " AS id, followers, IF(ribbit IS NULL, 'This user has no ribbits.', ribbit) ";
+	            $query .= "AS ribbit, followed FROM (SELECT COUNT(*) as followers FROM Follows WHERE followee_id = " . $i . ") ";
+	            $query .= "AS F LEFT JOIN (SELECT user_id, ribbit FROM Ribbits WHERE user_id = " . $i;
+	            $query .= " ORDER BY created_at DESC LIMIT 1) AS R ON R.user_id = " . $i . " JOIN (SELECT COUNT(*) ";
+	            $query .= "AS followed FROM Follows WHERE followee_id = " . $i . " AND user_id = " . $user->id . ") AS F2 LIMIT 1;";
+	            $userArr[$i] = $row;
+	        }
+	        $this->db->multi_query($query);
+	        $profiles = array();
+	        do{
+	            $row = $this->db->store_result()->fetch_object();
+	            $i = $row->id;
+	            $userArr[$i]['followers'] = $row->followers;
+	            $userArr[$i]['followed'] = $row->followed;
+	            $userArr[$i]['ribbit'] = $row->ribbit;
+	            array_push($profiles, (object)$userArr[$i]);
+	        }while($this->db->next_result());
+        return $profiles;
+        }
+        else
+        {
+	        return null;
+        }
+    }
+[/php]</pre>
+
+<p>It's a lot to take in so I'll go over it slowly. The first if/else statement checks whether or not the user passed something in to be searched and generates the appropriate sql query to get 10 users. Then we move on to make sure that the query returned users, and if so it will move on to generate a second query for each user getting there latest ribbit and info. After that we send all the queries together to the database with the 'multi_query' command to optimise on unnecessary trips to the database, and then we take the results and combine them with the user's info that we got from the first query. All this gets returned to the profiles view to be displayed.</p>
+
+<p>If you have done everything correctly up to now you should be able to traverse through all the pages and post ribbits. The only thing we have left to do is add the functions to follow and unfollow other people.</p>
+
+<div class="tutorial_image"><img src="P7.png" border="0" /></div>
+
+<hr />
+<h2>Tying up the Loose Ends</h2>
+
+<p>There is no view associated with these functions so it will be quick. Let's start with the functions in the controller class:</p>
+
+<pre>[php]
+    private function follow($params){
+        $user = $this->checkAuth();
+        if($user === false){ $this->redirect("home/7"); }
+        else{
+            $this->model->follow($user, $params[0]);
+            $this->redirect("profiles");
+        }
+    }
+
+    private function unfollow($params){
+        $user = $this->checkAuth();
+        if($user === false){ $this->redirect("home/7"); }
+        else{
+            $this->model->unfollow($user, $params[0]);
+            $this->redirect("profiles");
+        }
+    }
+[/php]</pre>
+
+<p>The functions, as you can probably see are almost identical, the only difference is that one adds a record to the 'Follows' table and one removes a record. Now let's finish it up with the functions in the Model class:</p>
+
+<pre>[php]
+	public function follow($user, $fId){
+        $this->insert("Follows", array("user_id" => $user->id, "followee_id" => $fId));
+    }
+    
+    public function unfollow($user, $fId){
+        $this->delete("Follows", array("user_id" => $user->id, "followee_id" => $fId));
+    }
+[/php]</pre>
+
+<p>Like I said they are basically the same, with just a one word difference. The site is now fully operational!!! The last thing which I want to add is another .htaccess file but this time inside the Views folder. So create a .htaccess file inside the Views folder and put in the following:</p>
+
+<pre>[bash]
+Order allow,deny
+     Deny from all
+[/bash]</pre>
+
+<p>This is not strictly necessary but it is good to restrict access to private files.</p>
+
+<hr />
+<h2>Conclusion</h2>
+
+<p>This has been a very long article but we covered alot. We setup a database with a bunch of tables we created our very own MVC framework and we definitely built a twitter clone from scratch in PHP. I had to cut out alot of the features that you may find in a real production application like AJAX, protection against SQL injection and a character counter for the ribbit box (propably alot of other things aswell), but overall I think this is a solid base to work off of.</p>
+
+<p>I hope you enjoyed this article, feel free to leave me a comment below if you have any thoughts or questions and thank you for reading.</p>
